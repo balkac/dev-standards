@@ -1,0 +1,37 @@
+root = true
+
+# C# source — project-wide engineering conventions (see CONVENTIONS.md next to this file).
+# Rider and `dotnet format` both read this file, so the rules are tool-enforced, not just documented.
+[*.cs]
+indent_style = space
+indent_size = 4
+tab_width = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Braces: always required, even for single-statement bodies (IDE0011).
+csharp_prefer_braces = true:warning
+
+# Allman braces: the opening brace goes on its own next line.
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_object_initializers = true
+
+# var policy: use 'var' when the type is already apparent from the right-hand side (new/cast);
+# keep the explicit type otherwise (e.g. a method result), and for built-in types, for readability.
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:warning
+csharp_style_var_elsewhere = false:suggestion
+
+# Modern C# expression styles Rider also suggests.
+csharp_style_expression_bodied_methods = false:silent
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_conditional_expression_over_assignment = true:silent
+dotnet_sort_system_directives_first = true
