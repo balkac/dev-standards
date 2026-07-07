@@ -85,10 +85,13 @@ you from referencing outward or pulling the framework into the core.
 
 ## 6. Composition root
 
-- **Manual wiring, no DI container.** A single `Composition` assembly constructs the graph:
-  build the services (provider chains, colour providers, …), inject them into the controllers, own
-  the entry point (`GameBootstrapper` / `Program`). Teardown is explicit (`IDisposable` drops
-  subscriptions).
+- **Manual wiring by default; a DI container only when the graph earns it.** A single `Composition`
+  assembly constructs the graph: build the services (provider chains, colour providers, …), inject
+  them into the controllers, own the entry point (`GameBootstrapper` / `Program`). Teardown is
+  explicit (`IDisposable` drops subscriptions). For a small-to-medium graph, hand-wiring is clearer
+  and dependency-free — you can *read* the whole object graph in one file. Reach for a container only
+  when the graph's size, lifetime management, or scoping genuinely justifies it; it's a scaling
+  decision, not a default.
 - Keeping composition in one place means every other layer depends only on abstractions and never
   on the concrete wiring.
 
@@ -106,7 +109,47 @@ and tries the next on failure. Thin wrappers that differ only in a base URL or r
 underlying helper. Decide explicitly whether there's caching (often "one fallback, no cache" is
 simplest and clearest).
 
-## 8. `.meta` hygiene (Unity)
+**Content falls back the same way.** The pattern isn't only for I/O: a configuration asset can fall
+back to a built-in default when it's left empty — an empty shape/level catalogue resolves to a
+`DefaultShapes`/`DefaultLevels` constant. That makes config an *override*, never a hard dependency, so
+the app always runs (a Null-Object flavour of the same "try the next source" idea).
+
+## 8. Command in → outcome out (the core boundary)
+
+Shape the seam between the pure core (Application) and the framework layers as **a command in, an
+immutable outcome out** — not shared mutable state the outer layers read back.
+
+- The core takes a **command** (a small value describing intent: *place this piece here*, *apply this
+  input*) and returns an **outcome record** describing everything that changed. Presentation
+  **replays** that outcome to animate or render; it never reaches into the core to diff what happened.
+- Knowledge stays one-way (the core knows nothing about the view), the step is trivially testable
+  (assert on the returned record), and it pairs naturally with `Result<T>`: `Result<MoveOutcome>` is
+  *either a described change or a reason it failed*.
+- Keep the outcome a **read model built for its consumer**, carrying what the view needs to replay and
+  nothing more — so it doesn't become the domain entities leaking out under a new name (an
+  anaemic-model / leaky-abstraction smell).
+
+## 9. Behavioural seams — vary by injection, not inheritance
+
+Where behaviour must vary, put the variation behind a **port (interface) chosen at the composition
+root**, so new behaviour is a new implementation rather than a new branch or a subclass. This is the
+structural side of "composition over inheritance" (see [`CONVENTIONS.md`](CONVENTIONS.md) §3). Three
+reusable shapes:
+
+- **One driver, many implementations.** A single caller (an input controller, a scheduler) talks to a
+  port; several implementations satisfy it and reuse the *same* surrounding machinery. Because the
+  contract lives on the interface, **Liskov governs the implementations** — each must honour the
+  port's behavioural contract. (That is where LSP lives once you favour composition; it is *not* "moot
+  because there's no inheritance" — a substitutable type is a substitutable type, subclass or impl.)
+- **Tag commands with their actor.** Carry *who* issued a command on the command itself, and key
+  per-actor state (score, turn, stats) by it. Adding a second participant — an AI, a networked peer, a
+  replay — is then **additive**: the same command into the same core, not a parallel code path.
+- **Model "who supplies the next input" as a port.** An input/move *source* that the loop asks for the
+  next command — and that is allowed to **take real time** — lets you swap a local AI for a networked
+  peer as a new implementation, with no change to the loop or the rules. It's the fallback-chain idea
+  (§7) applied to the *producer* of input rather than to a resource.
+
+## 10. `.meta` hygiene (Unity)
 
 - When you move/rename/delete a `.cs`, move/remove its `.cs.meta` too (**preserve the GUID**) and
   clean orphan `.meta` files. A folder move that only relocates files (no code change) is fine
@@ -121,5 +164,10 @@ simplest and clearest).
 2. Is there **one assembly per layer**, with references pointing only inward?
 3. Is the feature **packaged together** (by feature), and is each folder **one responsibility**?
 4. Does any `async` accidentally sit in Domain/Application? Move it out to Infrastructure.
-5. Do fallible operations return `Result`/`Result<T>` instead of throwing (see `CONVENTIONS.md` §4)?
-6. Are the pure parts covered by `dotnet`-runnable tests?
+5. Do fallible operations return `Result`/`Result<T>` for *expected* failure — and still fail-fast on
+   a broken invariant (see `CONVENTIONS.md` §4)?
+6. Does the core boundary take a **command** and return an **immutable outcome** the outer layer
+   replays, rather than exposing mutable state to read back (§8)?
+7. Is behavioural variation behind an **injected port** (composition over inheritance), with each
+   implementation honouring the port's contract (§9)?
+8. Are the pure parts covered by `dotnet`-runnable tests?
