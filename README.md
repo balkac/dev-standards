@@ -14,6 +14,7 @@ project — copy the whole folder into a new repo and start.
 | [`UNITY.md`](UNITY.md) | **Unity** | Engine correctness: lifecycle/initialisation order, frame & time semantics, enable/disable/destroy, mobile app lifecycle, events & teardown, async/threading, persistence traps. |
 | [`GAME-FEEL.md`](GAME-FEEL.md) | **Unity / casual games** | The design-side standards: reference-pattern research, FTUE engineering, authored motion, input feel, budgeted juice — design defaults to validate by playtest. |
 | [`starter-tree.md`](starter-tree.md) | **Unity** | An empty layered skeleton (assemblies + folders) to copy and start from, plus the `dotnet test` bridge for the pure layers. |
+| [`COMMIT-CONVENTIONS.md`](COMMIT-CONVENTIONS.md) | **Any repo** | Conventional Commits adapted: required types, tree-derived scopes, imperative subjects, why-bodies, breaking-change footers. |
 | [`.editorconfig`](.editorconfig) | **Any C#** | The mechanical rules (braces, `var`, Allman, import sorting), **tool-enforced** — Rider and `dotnet format` both read it. |
 | [`.gitattributes`](.gitattributes) | **Unity** | Unity line-ending/merge template + the "store binaries inline, not in LFS" decision (see the note in the file). |
 
