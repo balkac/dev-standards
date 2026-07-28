@@ -7,6 +7,10 @@ the layering, package-by-feature, and async-boundary ideas apply to any layered 
 
 For an empty skeleton to copy, see [`starter-tree.md`](starter-tree.md).
 
+> Verified: Unity 6000.3.16f1 · Addressables 2.11.1 · last reviewed 2026-07-28. Engine/BCL facts
+> in this set are version-tagged; the layering rules here are **house defaults with rationale** —
+> scope notes in place say where they bend.
+
 ---
 
 ## 1. Clean architecture — dependencies point inward
@@ -17,8 +21,10 @@ Domain  ←  Application  ←  Infrastructure / Presentation  ←  Composition
                          Common (cross-cutting, no deps)
 ```
 
-- **Domain** — pure C#, **no framework** (no `UnityEngine`), **no exceptions**. Value objects,
-  entities, geometry, the core model. Trusts its own internally-validated inputs.
+- **Domain** — pure C#, **no framework** (no `UnityEngine`); expected failure returns `Result`,
+  never an exception — fail-fast `throw` stays legitimate for a broken invariant
+  (`CONVENTIONS.md` §4 owns that distinction). Value objects, entities, geometry, the core model.
+  Trusts its own internally-validated inputs.
 - **Application** — pure & **synchronous**, **headless-testable**, **no framework**. Use cases and
   algorithms orchestrated from small collaborators behind interfaces. Depends only on Domain +
   Common.
@@ -76,12 +82,61 @@ you from referencing outward or pulling the framework into the core.
 
 - **Async lives only in framework-coupled layers** (Infrastructure and up). The pure **Domain** and
   **Application** layers stay **synchronous** so they remain headless-testable with `dotnet test`,
-  without a Unity PlayerLoop or event loop.
-- In Unity, use **UniTask** (`UniTask<Result<T>>`), which is allocation-free and integrates with the
-  PlayerLoop — but *because* UniTask is Unity-coupled, an async port like `ILevelProvider` belongs in
-  **Infrastructure**, not Application. The Application layer never returns a `Task`/`UniTask`.
+  without a Unity PlayerLoop or event loop. *Scope note:* this is the default **profile for a
+  fully-local content game** (casual/puzzle, millisecond loads at designed moments). A game with
+  real backend surfaces — cloud save, remote config, IAP, live-ops — legitimately grows async
+  *orchestration* in its outer flow controllers; the pure rules core stays synchronous either way,
+  and that split is the part that generalises.
+- In Unity, the preferred async primitive is **UniTask** (`UniTask<Result<T>>`) — and the reasons
+  are mechanical, not fashion: `Task` is a class (a heap object per operation, plus state-machine
+  boxing on suspension) and resumes through a `SynchronizationContext.Post`; UniTask is
+  struct-based with pooled continuations (~zero allocation) and integrates directly with the
+  PlayerLoop (`await UniTask.Yield(PlayerLoopTiming.…)`) — under a non-generational GC
+  (`PERFORMANCE.md` §10) that allocation difference is the point. But *because* UniTask is
+  Unity-coupled, an async port like `ILevelProvider` belongs in **Infrastructure**, not
+  Application. The Application layer never returns a `Task`/`UniTask`.
+- **UniTask is a preference, not a prerequisite** — adopt it when the async surface earns it, not
+  before. Addressables needs no extra library to be awaited: every `AsyncOperationHandle` already
+  offers `Completed` callbacks, coroutine `yield`, a built-in `.Task` for plain `await`, and
+  synchronous `WaitForCompletion`. UniTask's Addressables extension makes the await
+  allocation-free and adds cancellation ergonomics (`WithCancellation(destroyCancellationToken)`)
+  — valuable once many concurrent loads, cancellation chains, or loop-timed flows exist; noise as
+  a dependency while async remains a handful of load-time awaits (which happen on transition
+  frames, where a `Task` allocation is tolerable anyway). The tool arrives together with the
+  boundary opening — never ahead of it.
 - Same principle outside Unity: keep the algorithmic core synchronous and push `async`/`Task` out to
   the I/O adapters, so the core can be tested without an async host.
+- **Don't open the boundary before a real latency exists — a researched minority stance, held on
+  its merits.** The ecosystem default is async everywhere; this set deliberately deviates for
+  bundled-local content, on this evidence line: Unity's own rationale for async-by-default is
+  **latency** ("content might need to be downloaded first… take a long time") — the *network*
+  kind is absent for local bundles (local still pays disk, decompression and deserialization on
+  the main thread — `PERFORMANCE.md` §14), and for the local/cached case the docs put the sync
+  cost at "small"/"minimal" and present `WaitForCompletion` as a supported workflow, not an
+  escape hatch. Async on local content introduces **intermediate states that require explicit
+  handling**: the moment a flow awaits, its in-between state becomes observable — input arriving
+  mid-load, teardown mid-await, placeholder frames when the handling is missed (observed in the
+  wild: Unity's own Localization package, async by default, is reported to flash fallback text
+  for a frame or two on local tables, and offers a supported *synchronous* mode). And async is contagious — every caller of an async signature becomes
+  async (the literature genuinely disputes whether that is a cost or a discipline; this set
+  treats it as a cost to defer until it buys something). The stance is only legitimate **with its
+  guardrails written into the port's contract**: local content only (remote is a different port),
+  never scenes, never in `Awake`, not on WebGL, the **worst-case stall measured on target
+  hardware** and confined to designed loading moments (gameplay/animation frames never block on a
+  load), and the port owner knows the concurrent Addressables population (`PERFORMANCE.md` §14's
+  completes-ALL-active-operations side effect).
+  Future-proofing is done by **placing the seam** (a port the async implementation will later
+  stand behind, §7's fallback chain) — with the honest caveat that the true migration cost is not
+  signatures but **caller timing assumptions**: call sites quietly accrete same-frame-completion
+  expectations, so the port's contract states completion timing explicitly. Unity 6 also ships a
+  first-party pooled awaitable (`Awaitable`) — semantics differ from `Task`; see
+  [`UNITY.md`](UNITY.md) §6.
+- **When content does go remote, split download from load.** `DownloadDependenciesAsync` (with
+  `GetDownloadSizeAsync` for the "download N MB?" prompt) pulls bundles into the local cache as an
+  explicit, async, UX-owned phase — progress, cancellation, retry and the fallback chain all live in
+  that one designed loading state, never mid-gameplay. After it, the actual asset **load is local
+  again** (cache-hit) and the synchronous flow shape survives; instantiation of heavy prefabs is a
+  separate main-thread cost handled by the usual load-time pooling, not by async.
 
 ## 6. Composition root
 
@@ -94,6 +149,14 @@ you from referencing outward or pulling the framework into the core.
   decision, not a default.
 - Keeping composition in one place means every other layer depends only on abstractions and never
   on the concrete wiring.
+- **The composition root also owns lifetimes — including the app-lifetime/rebind model.** In a
+  level/round-based game, prefer app-lifetime components that are **re-bound** per level over
+  destroy-and-recreate cycles (the performance case is `PERFORMANCE.md` §4). The contract that
+  makes it safe: every persistent component exposes one `Configure`/`Bind`-style rebind that
+  explicitly resets its clocks, pending callbacks, and stale references — nothing is "trusted to
+  die with the level", because nothing dies. And every runtime-created *native* object (`Mesh`,
+  `Material`, render texture) has exactly **one named owner** that creates it once and releases it
+  in its own teardown — never shared creation with ambient ownership.
 
 ## 7. Fallback chains (a reusable I/O pattern)
 
@@ -128,6 +191,12 @@ immutable outcome out** — not shared mutable state the outer layers read back.
 - Keep the outcome a **read model built for its consumer**, carrying what the view needs to replay and
   nothing more — so it doesn't become the domain entities leaking out under a new name (an
   anaemic-model / leaky-abstraction smell).
+- **The sim resolves instantly; only presentation takes time.** The core applies a command and
+  returns the *final* state in the same call — falling pieces, cascades and refills are already
+  resolved in the outcome; the view animates *toward* that truth on its own clock. This is what
+  makes "the board stays interactive while things animate" trivial: a new tap queries the logical
+  board (already final), not the half-animated view. The alternative — gating input on animation
+  completion — is both worse feel and a coupling of rules to rendering.
 
 ## 9. Behavioural seams — vary by injection, not inheritance
 
@@ -148,6 +217,12 @@ reusable shapes:
   next command — and that is allowed to **take real time** — lets you swap a local AI for a networked
   peer as a new implementation, with no change to the loop or the rules. It's the fallback-chain idea
   (§7) applied to the *producer* of input rather than to a resource.
+- **A 1:1, re-bound callback is an assignable delegate, not an event.** C# `event`s model *many*
+  listeners with *matching* unsubscribes; on a persistent component whose consumer is replaced every
+  level, `+=` quietly accumulates dead subscribers and the leak is one forgotten `-=` away. An
+  assignable `Action` property ("latest binding wins") makes the stale subscription **structurally
+  impossible** instead of discipline-dependent. Reserve `event` for genuine broadcast seams where
+  independent listeners come and go.
 
 ## 10. `.meta` hygiene (Unity)
 
@@ -159,8 +234,9 @@ reusable shapes:
 
 ## Checklist for a new layer / feature
 
-1. Does it belong in Domain (pure, no framework, no exceptions), Application (pure, synchronous),
-   or a framework-coupled layer? Put it in the **innermost** layer that can hold it.
+1. Does it belong in Domain (pure, no framework, `Result` for expected failure — `CONVENTIONS.md`
+   §4), Application (pure, synchronous), or a framework-coupled layer? Put it in the **innermost**
+   layer that can hold it.
 2. Is there **one assembly per layer**, with references pointing only inward?
 3. Is the feature **packaged together** (by feature), and is each folder **one responsibility**?
 4. Does any `async` accidentally sit in Domain/Application? Move it out to Infrastructure.

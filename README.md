@@ -10,7 +10,9 @@ project — copy the whole folder into a new repo and start.
 |---|---|---|
 | [`CONVENTIONS.md`](CONVENTIONS.md) | **Any C# / .NET project** | Code style, naming, SOLID-in-the-small, error handling, testing & process. Applies with or without Unity. |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | **Unity (and layered apps)** | Clean-architecture playbook: layers as assemblies, package-by-feature, one-responsibility-per-folder, the async boundary, `Result` instead of `throw`, command→outcome boundary, behavioural seams. |
-| [`PERFORMANCE.md`](PERFORMANCE.md) | **Unity** | Keeping it smooth and low-garbage: light-by-construction, world-space vs. canvas, pooling, budgets from a config asset, safe update loops, tween teardown. |
+| [`PERFORMANCE.md`](PERFORMANCE.md) | **Unity** | Keeping it smooth and low-garbage: light-by-construction, pooling contracts, budgets from a config asset, C# allocation mechanics, Boehm GC, API traps, device measurement, mobile rendering/build, procedural meshes, Addressables, canvas/TMP, memory verification. |
+| [`UNITY.md`](UNITY.md) | **Unity** | Engine correctness: lifecycle/initialisation order, frame & time semantics, enable/disable/destroy, mobile app lifecycle, events & teardown, async/threading, persistence traps. |
+| [`GAME-FEEL.md`](GAME-FEEL.md) | **Unity / casual games** | The design-side standards: reference-pattern research, FTUE engineering, authored motion, input feel, budgeted juice — design defaults to validate by playtest. |
 | [`starter-tree.md`](starter-tree.md) | **Unity** | An empty layered skeleton (assemblies + folders) to copy and start from, plus the `dotnet test` bridge for the pure layers. |
 | [`.editorconfig`](.editorconfig) | **Any C#** | The mechanical rules (braces, `var`, Allman, import sorting), **tool-enforced** — Rider and `dotnet format` both read it. |
 | [`.gitattributes`](.gitattributes) | **Unity** | Unity line-ending/merge template + the "store binaries inline, not in LFS" decision (see the note in the file). |
@@ -29,9 +31,9 @@ skeleton.
    `.editorconfig` starts working immediately in Rider / VS / `dotnet format` — the style rules
    below are then enforced, not just documented.
 
-2. **Keep the docs where the team reads them.** Either copy `CONVENTIONS.md` (+ `ARCHITECTURE.md` and
-   `PERFORMANCE.md` for Unity) into the project's `Docs/` folder, or link to this repo from the
-   project README.
+2. **Keep the docs where the team reads them.** Either copy `CONVENTIONS.md` (+ the Unity set:
+   `ARCHITECTURE.md`, `PERFORMANCE.md`, `UNITY.md`, `GAME-FEEL.md`, `starter-tree.md`) into the
+   project's `Docs/` folder, or link to this repo from the project README.
    If you copy them, fix the relative link at the top of `.editorconfig`'s comment to point at
    wherever `CONVENTIONS.md` landed.
 
@@ -44,10 +46,11 @@ skeleton.
 ## The one-paragraph version
 
 Braces everywhere, Allman style, `var` only when the type is already apparent. One public type
-per file, methods are **verb + object**, names say what a thing *is* (type) vs the *role* it
-plays (member). Clean architecture with dependencies pointing inward, one assembly per layer,
-package **by feature not by technical layer**, one responsibility per folder. The pure core
-(Domain + Application) has **no framework dependency, no exceptions, and no async** — fallible
-operations return `Result` / `Result<T>`; async lives only in the framework-coupled layers so
-the core stays headless-testable. Every collaborator gets isolated tests; validate headless
-before opening the editor. Deliverable docs and code comments are in English.
+per file, methods are **a verb or a verb phrase**, names say what a thing *is* (type) vs the
+*role* it plays (member). Clean architecture with dependencies pointing inward, one assembly per
+layer, package **by feature not by technical layer**, one responsibility per folder. The pure
+core (Domain + Application) has **no framework dependency and no async** — expected failure
+returns `Result` / `Result<T>` (fail-fast `throw` stays for broken invariants); async lives only
+in the framework-coupled layers so the core stays headless-testable. Every collaborator gets
+isolated tests; validate headless before opening the editor. Deliverable docs and code comments
+are in English.
