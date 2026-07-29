@@ -12,7 +12,7 @@ matter. The engine's correctness-side semantics (lifecycle, time, object lifetim
 > C# 10 interpolation handlers) — none of it is active on this baseline (§8), and BCL allocation
 > claims are verified against this Unity version's shipped IL, not against web lore.
 > Verified: Unity 6000.3.20f1 (mscorlib byte-identical to 6000.3.16f1, the IL-inspected build) ·
-> Addressables 2.11.1 · last reviewed 2026-07-28.
+> Addressables 2.11.1 · last reviewed 2026-07-29.
 
 ---
 
@@ -146,9 +146,20 @@ bursts (each of these was measured as a real multi-KB offender before being bann
   fields, not re-passed per level or per frame.
 - **Logs are allocations (and I/O).** Interpolated `Debug.Log` on action paths is editor-only
   (`#if UNITY_EDITOR`); a device development build pays both the string and the logcat write.
-- **No runtime IMGUI (`OnGUI`) — dev overlays included.** IMGUI allocates tens of KB per frame just
-  to pump events and repaint; a debug HUD drawn with it poisons the very numbers it reports. Overlays
-  are code-built uGUI (or equivalent) with cached strings.
+- **Runtime IMGUI (`OnGUI`) is a measured budget item, not a blanket ban — but a naive overlay does
+  poison the numbers it reports.** Measured on this baseline (empty scene, development player, Mono
+  and IL2CPP agree; `com.balkac.perfhud` 0.3.0 `Measure~/` harness): a straightforward IMGUI HUD
+  costs **~0.7–3 KB/frame** of GC — the layout pump (~370 B/frame even with zero `GUILayout` calls)
+  plus a `GUIContent.Temp` copy of every string passed to `GUI.Label`/`GUI.Button` — *not* the
+  "tens of KB per frame" folklore, which player measurements do not reproduce. The discipline:
+  `useGUILayout = false`, draw through cached `GUIContent` instances, cache value-strings and
+  rebuild text only when a displayed value changed. The floor after that lives in the native draw
+  bindings and is text-proportional (~140–160 B/frame for a two-line badge, ~630 B/frame for an
+  8-line panel), plus a text re-mesh spike on the frame a label actually changes
+  (`GUIStyle.GetMeshInfo`, ~24 KB for a panel of text). Whatever remains, **document it so readers
+  can subtract it, and give the overlay a hidden state that draws nothing (measured 0 B/frame) for
+  capture windows**. A code-built uGUI overlay stays a fine alternative where uGUI is already in
+  the project — a preference, not a performance necessity.
 
 **Schedule the writes, too.** Disk writes are frame cost even when the bytes are small: never save
 on a frame that is already opening UI or playing a landing beat; **coalesce** multiple state changes
