@@ -181,6 +181,11 @@ Feel is visual + haptic + audio together, and every channel has a budget:
 Authored content decays silently: a level that was fair when it was tuned becomes unwinnable three
 balance changes later, and nobody notices until a player reports it. Automate the floor.
 
+*Scope note:* the bot gate below presumes a game whose answer the bot has to **find**. Where a bot
+would simply know the answer — a tracking or memory game, whose difficulty is perceptual — the gate's
+counterpart is a measured trackability model owned by that project's level-design document; this
+section supplies only the principle (automate the floor), not the instrument.
+
 - **A goal-seeking bot plays every shipped level N times** (with the refill/randomness seeds that
   real attempts would use) and the suite **fails below a win-rate floor**. This turns "is the
   content still beatable?" from a memory into a gate. Measured value here: four shipped levels came
