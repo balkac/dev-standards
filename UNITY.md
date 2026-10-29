@@ -93,6 +93,17 @@ correctness companion to [`PERFORMANCE.md`](PERFORMANCE.md), which covers the co
   Infrastructure save path, and treat "resumed after an arbitrary gap" as a normal launch state.
   *(Cite the right page: the prescription lives on `OnApplicationQuit`; the `OnApplicationFocus`
   page itself only documents when the callback fires.)*
+- **Pause flushes; it never disposes.** The app comes back. Measured bug: a telemetry sink
+  disposed in `OnApplicationPause(true)` stopped recording for the rest of the session after the
+  first trip to the background. Flush (and write state) on pause; dispose only on destroy/quit.
+- **No disk write per event.** A `Flush()` per line is a write syscall on the calling thread.
+  Buffer (a 64 KB writer buffer is plenty for logs/telemetry) and write when the buffer fills, on
+  a slow interval (seconds), and on pause; or coalesce on a background thread. The same applies to
+  saves: mark dirty, coalesce, write on pause (§7 for the file protocol).
+- **A suspended iOS app's listening socket is invalidated.** After a screen lock or an app switch
+  a TCP server in the app still looks open but accepts nothing (seen on an iPhone on iOS 27; the fix
+  verified by suspending and resuming the app in the simulator). Close servers on pause and reopen
+  them on resume; also reopen the listener if `Accept` throws while running.
 - Two documented gotchas: `OnApplicationPause` fires once with `false` during startup (right
   after `Awake`) — save logic must ignore that call; and on Android, focus can be lost without a
   pause (on-screen keyboard). The often-quoted exact iOS pause/focus ordering is community lore,

@@ -36,6 +36,11 @@ broken does not need a line here.
       already give the guarantee? (`PERF` §5)
 - [ ] Zero allocation on the steady-state path — and is that path **named**, with the deliberate
       exceptions stated? (`PERF` §4)
+- [ ] Any disk write on a per-event path, or a dispose on pause? Buffer, flush on pause and on a
+  slow interval; pause flushes, destroy disposes. (`UNITY` §4)
+- [ ] More than one camera on screen with MSAA on a tile GPU? A URP stack keeps the MSAA targets in
+  RAM — draw the overlay as a pass of the base camera. Does any camera cull every layer while
+  lit objects still draw that frame? (`PERF` §12)
 - [ ] If it loads through Addressables synchronously, is every guardrail satisfied?
       (`ARCH` §5a)
 - [ ] New tests for happy path, both boundaries, buffer reuse, determinism — and if something was

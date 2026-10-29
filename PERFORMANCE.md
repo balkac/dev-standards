@@ -374,6 +374,13 @@ zero-alloc code is mostly habit, not effort.
   as an interface**. `List<T>` has a struct enumerator that `foreach` uses for free, but reach the
   list through `IReadOnlyList<T>`/`IEnumerable<T>` and that enumerator is **boxed on every loop**.
 - `params` methods (the compiler builds an array per call).
+- **Timed waits on a background thread.** Unity's per-frame GC counter ("GC Allocated In Frame")
+  counts **every thread**, so a worker is not off the books. Measured (Unity 6000.3, iOS simulator
+  and device, Mono and IL2CPP alike): a log-file writer polling its queue with
+  `BlockingCollection.TryTake(out item, 100)` allocated 400–750 B per wake — ten times a second in
+  an otherwise idle game, visible as a steady few hundred bytes on every HUD readout. Blocking
+  without a timeout (`GetConsumingEnumerable`, with a marker item enqueued to request a flush) took
+  the idle window from 49 allocating frames in 5 s to 2 (the measuring connection's own log lines).
 
 **Free:** `new` structs, `foreach` directly over an array or concretely-typed `List<T>`,
 captureless/`static` lambdas after first use, and indexer access through `IReadOnlyList<T>` —
@@ -416,6 +423,8 @@ Engine calls that allocate on every use, and their free counterparts:
 | `new WaitForSeconds(...)` inside a loop | cache one instance outside the loop |
 | `Debug.Log("hp: " + hp)` on a frame path | log on events, not frames; strip logs from release |
 | repeated `GetComponent<T>` lookups | cache in `Awake`; `TryGetComponent` for the miss case |
+| `sprite.uv`, `sprite.vertices`, `sprite.triangles` (a new array per read) | read once per sprite and keep them (a `Dictionary<Sprite, Vector2[]>` beside the mesh that uses them) |
+| `JsonConvert.SerializeObject` per event — measured ~2 KB per small telemetry line (the writer, its `StringBuilder`, rented buffers, first-use contract reflection) | write the few known shapes into a reused `StringBuilder`, copy out through a reused `char[]`, and check once that the output is byte-identical to the serializer's |
 
 **String-keyed engine APIs are CPU traps even when they don't allocate:** `animator.SetFloat("Speed",
 v)` pays the hash/lookup per call — cache `Animator.StringToHash` / `Shader.PropertyToID` ids once,
@@ -478,6 +487,20 @@ The opening line says profile before optimising; concretely:
   median and the same two outlier frames is what turns a number into evidence. Read a deep
   capture's absolute times as a ceiling, not a figure: deep profiling inflates them, so what the
   run establishes is *who*, not *how much*.
+- **Separate warm-up from steady state with consecutive windows.** One capture mixes first-use
+  costs with recurring ones. Three back-to-back 30 s windows of the same scripted play (the game
+  driving itself through its own commands) separate them: warm-up decays window to window (TMP
+  buffer growth 331 → 85 → 21 KB) while a per-event cost repeats unchanged (~55 KB of telemetry
+  serialization in each). Attribute both by call stack, not by method name at the top of the stack:
+  the profiler's managed allocation call stacks (Unity Profiler with GC.Alloc call stacks, or the
+  same data read through `ProfilerDriver` and `RawFrameDataView.GetSampleCallstack` from a script)
+  name the first frame of *your* code under an engine allocation, which is the line to change.
+- **Read memory from the OS figure, not Unity's graphics estimate.** "Gfx Used Memory" is what
+  Unity believes it allocated through the graphics API; the number the OS charges the app (Unity's
+  "System Used Memory" counter) can sit far from it in either direction. Measured on one build:
+  iPhone 17 Pro — OS 542 MB vs Unity total 411 MB; iOS simulator — OS 238 MB vs Unity total
+  420 MB. Budgets and before/after claims use the OS figure, read on the device; Unity's per-object
+  sizes are for *ranking* what holds memory, not for adding it up.
 - **A zero-allocation claim needs a guard test in the suite, and three false positives will fool
   it first.** All three were observed here before the measurement was trustworthy: the measured
   block included a helper that allocates an array (`GetComponentsInChildren`); the test's pools
@@ -520,6 +543,33 @@ The habits that matter for this class of game — a 2D URP scene driven by sprit
   stack full-screen alpha fades. (**MSAA is the desktop-intuition exception**: tile-based GPUs
   resolve it on-tile, so 2x–4x is *typically* cheap — bandwidth and store costs still exist, so
   confirm on a representative device; for a flat 2D game it's simply unnecessary either way.)
+- **On-tile MSAA needs one camera drawing to the screen — a URP camera stack moves it into RAM.**
+  Measured (iPhone 17 Pro, 1206×2622, 4x MSAA, URP 17 on Render Graph, Unity 6000.3): a sprite UI
+  drawn by an overlay camera stacked on the 3D base camera made URP render the stack into
+  intermediate textures, so a 4x MSAA depth target (136 MB) and two 4x MSAA colour targets (60 MB
+  each) were resident — 256 of the app's 542 MB as the OS reported it. Drawing the UI layer as a
+  pass of the base camera instead — a render-graph raster pass using the UI camera's view and
+  projection, depth cleared first, dynamic batching and per-object lighting enabled as a camera
+  would have them, the UI camera kept only for touch mapping — made the MSAA depth memoryless and
+  on the device the render targets went from 256 MB to 2 KB (the frame now goes straight to the
+  drawable) and the OS figure from 548 MB to 385 MB, frame time p99 16.8 ms at 60 fps under scripted
+  play. The OS figure falls by 162 MB, less than Unity's 256 MB, because the drawables and the
+  on-tile MSAA backing belong to the system. The picture stayed pixel-identical and batches went
+  19 → 20. So the "single camera" line below is a memory rule as much as a CPU one; and before lowering
+  MSAA or render scale to save memory, check whether a stack is what keeps the targets resident.
+- **A camera that culls every layer culls its lights too.** Setting a base camera's culling mask to
+  0 to stop drawing a covered scene also drops the main light from that camera's frame; lit
+  objects drawn later in the same frame by another pass come out unlit (observed: the fight scene's
+  lit Spinner models turned dark the moment the UI moved into the base camera's pass). Keep the
+  light on a layer of its own that holds no renderers, and leave that one bit in the mask.
+- **World-space TextMeshPro allocates on first activation and grows in steps.** A `TextMeshPro`
+  allocates its buffers in `Awake` — the first time its object becomes active, so a hidden panel
+  pays on its first show — and grows its per-text arrays in power-of-two steps as the text gets
+  longer (a `TMP_CharacterInfo` is 376 B in TMP for Unity 6). Warm every text at build time
+  (activate hidden ones within the call, `ForceMeshUpdate`), and size *only the texts that change
+  during steady play* for their longest value: sizing every text for its box cost 4.8 MB of
+  buffers to avoid ~400 KB of one-time growth; reserving only counters, damage numbers, badges and
+  banners cost ~1 MB and left growth only on panel texts at the moment their panel opens.
 - **Texture memory**: compress with **ASTC** (Unity's recommended format for iOS — A8 and newer
   — and the preferred format on modern Android; ETC2 remains the fallback for older devices). The
   sourced figures are Google's texture-compression-format-targeting page (read 2026-08): **ASTC
@@ -540,7 +590,8 @@ The habits that matter for this class of game — a 2D URP scene driven by sprit
   reflection-driven serialization behind the one adapter and exercise it in a device build early.
 - **URP settings that matter on mobile 2D**: SRP Batcher on; HDR off; MSAA off (see above); Depth
   Texture / Opaque Texture off unless a feature needs them (each is an extra copy + tile load);
-  minimal or no post-processing on low-end; single camera. Unity 6 runs URP on **Render Graph** —
+  minimal or no post-processing on low-end; single camera (with MSAA on a tile GPU, a stack keeps
+  the MSAA targets in RAM — see above). Unity 6 runs URP on **Render Graph** —
   leave it on (it culls unused passes and merges work); Compatibility Mode is only for unported
   custom render features.
 - **Asset loading**: prefer direct references or Addressables over `Resources/` — `Resources`
